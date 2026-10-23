@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+sessions/
+*.mp3
+*.py.save
+backup_before_voice/
+
+data/
