@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Mock Interview Coach</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f3f5fa;
+      color: #182239;
+      margin: 0;
+      padding: 20px;
+    }
+
+    main {
+      max-width: 850px;
+      margin: auto;
+      padding: 24px;
+      background: white;
+      border-radius: 16px;
+    }
+
+    h1 { font-size: 28px; }
+    h2 { margin-top: 28px; }
+    p { line-height: 1.5; }
+    label { display: block; margin: 14px 0 6px; font-weight: bold; }
+
+    input, textarea {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 11px;
+      border: 1px solid #ccd3e0;
+      border-radius: 8px;
+    }
+
+    textarea { min-height: 120px; }
+
+    button {
+      padding: 11px 15px;
+      margin: 10px 5px 10px 0;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      background: #2859d6;
+      color: white;
+    }
+
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .secondary { background: #eaf0fb; color: #182239; }
+    .danger { background: #a52a2a; }
+
+    .panel, .card, .question {
+      padding: 14px;
+      margin: 12px 0;
+      border-radius: 10px;
+      background: #f5f7fc;
+    }
+
+    .question {
+      background: #edf2ff;
+      white-space: pre-wrap;
+    }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .hidden { display: none !important; }
+
+    #heard, #status { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #heard { padding: 12px; border: 1px solid #ddd; border-radius: 8px; }
+    #status { padding: 12px; background: #f5f7fc; margin-top: 18px; }
+    .muted { color: #657087; }
+    .entry { border-bottom: 1px solid #ddd; padding: 10px 0; }
+    .entry p { white-space: pre-wrap; }
+    .score { font-size: 24px; font-weight: bold; }
+
+    @media (max-width: 600px) {
+      body { padding: 10px; }
+      main { padding: 16px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+
+<body>
+<main>
+  <h1>AI Mock Interview Coach</h1>
+  <p class="muted">
+    Upload your resume and job description to practise a personalised
+    voice interview and receive feedback.
+  </p>
+
+  <div class="panel">
+    <strong>Privacy:</strong> Documents and answers are processed by external
+    AI providers. Interview files are saved locally by this app. Browser
+    speech recognition may use an external service and require internet access.
+  </div>
+
+  <section id="uploadSection">
+    <h2>1. Upload Documents</h2>
+
+    <label for="candidateName">Candidate Name</label>
+    <input id="candidateName" maxlength="100" placeholder="Your name">
+
+    <label for="resumeFile">Resume (PDF or TXT)</label>
+    <input id="resumeFile" type="file" accept=".pdf,.txt">
+
+    <label for="jobFile">Job Description File (optional)</label>
+    <input id="jobFile" type="file" accept=".pdf,.txt">
+
+    <label for="jobText">Or paste Job Description</label>
+    <textarea id="jobText" placeholder="Paste the job description here"></textarea>
+
+    <button id="analyseBtn">Analyse Documents</button>
+  </section>
+
+  <section id="analysisSection" class="hidden">
+    <h2>2. Document Analysis</h2>
+    <div id="analysisContent"></div>
+    <button id="startBtn">Start Interview</button>
+    <button id="changeDocsBtn" class="secondary">Change Documents</button>
+  </section>
+
+  <section id="interviewSection" class="hidden">
+    <h2>3. Voice Interview</h2>
+    <p>
+      Answer naturally. You can pause to think for as long as you need.
+      Your answer will be submitted only when you press
+      <strong>Stop Answer &amp; Submit</strong>.
+    </p>
+
+    <button id="listenBtn">Answer by Voice</button>
+    <button id="stopListenBtn" class="secondary" disabled>
+      Stop Answer &amp; Submit
+    </button>
+    <button id="endBtn" class="danger" disabled>End Interview</button>
+
+    <h3>AI Question</h3>
+    <div id="question" class="question"></div>
+
+    <h3>Recognised Answer</h3>
+    <div id="heard">Your answer will appear here.</div>
+
+    <p class="muted" id="micHint">
+      Start voice answering when you're ready.
+    </p>
+
+    <h3>Or type your answer</h3>
+    <textarea id="typedAnswer" placeholder="You can type your answer here instead."></textarea>
+    <button id="submitTypedBtn" class="secondary">Submit Typed Answer</button>
+
+    <div id="latestFeedback" class="card hidden"></div>
+
+    <h3>Transcript</h3>
+    <div id="transcript"></div>
+  </section>
+
+  <section id="reportSection" class="hidden">
+    <h2>4. Interview Report</h2>
+    <div id="reportContent"></div>
+    <button id="downloadBtn">Download JSON Report</button>
+    <button id="newInterviewBtn" class="secondary">New Interview</button>
+  </section>
+
+  <div id="status" role="status" aria-live="polite">Ready to begin.</div>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = id => document.getElementById(id);
+
+  const SpeechRecognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  let analysisId = null;
+  let sessionId = null;
+  let currentReport = null;
+  let currentAudio = null;
+
+  let recognition = null;
+  let restartTimer = null;
+
+  let active = false;
+  let listening = false;
+  let sending = false;
+  let ending = false;
+
+  // Controls the microphone restart and final submission.
+  let stopRequested = false;
+  let cancelAnswer = false;
+  let finalizingAnswer = false;
+
+  // The final transcript is preserved across microphone restarts.
+  let finalTranscript = "";
+  let interimTranscript = "";
+
+  function status(message, error = false) {
+    $("status").textContent = message;
+    $("status").style.color = error ? "#a52a2a" : "";
+  }
+
+  function safe(value) {
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[char]));
+  }
+
+  function list(items) {
+    if (!Array.isArray(items) || !items.length) {
+      return "<p class='muted'>Not specified.</p>";
+    }
+
+    return "<ul>" + items.map(item =>
+      "<li>" + safe(item) + "</li>"
+    ).join("") + "</ul>";
+  }
+
+  function showAnalysis(data) {
+    const groups = [
+      ["Skills", data.skills_found],
+      ["Projects", data.projects_found],
+      ["Experience", data.relevant_experience],
+      ["Job Requirements", data.key_job_requirements],
+      ["Matching Strengths", data.matching_strengths],
+      ["Skill Gaps", data.skill_gaps],
+      ["Interview Focus", data.interview_focus]
+    ];
+
+    $("analysisContent").innerHTML =
+      "<div class='card'><b>Candidate:</b> " +
+      safe(data.candidate_name) +
+      "<br><b>Target Role:</b> " +
+      safe(data.target_role) + "</div>" +
+      "<div class='grid'>" +
+      groups.map(([title, items]) =>
+        "<div class='card'><h3>" + title + "</h3>" +
+        list(items) + "</div>"
+      ).join("") + "</div>";
+  }
+
+  async function post(url, payload) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Request failed.");
+    }
+
+    return data;
+  }
+
+  async function speak(audio) {
+    if (!audio) return;
+
+    if (currentAudio) {
+      currentAudio.pause();
+    }
+
+    currentAudio = new Audio("data:audio/mpeg;base64," + audio);
+
+    try {
+      await currentAudio.play();
+    } catch {
+      status("Audio could not play. Read the question on screen.");
+    }
+  }
+
+  function addTranscript(speaker, message) {
+    const entry = document.createElement("div");
+    entry.className = "entry";
+
+    const heading = document.createElement("b");
+    const paragraph = document.createElement("p");
+
+    heading.textContent = speaker;
+    paragraph.textContent = message;
+
+    entry.append(heading, paragraph);
+    $("transcript").append(entry);
+  }
+
+  function updateButtons() {
+    $("analyseBtn").disabled = sending;
+    $("startBtn").disabled = sending || active;
+
+    $("listenBtn").disabled =
+      !active || listening || sending || ending || !SpeechRecognition;
+
+    $("stopListenBtn").disabled =
+      !listening || sending || ending;
+
+    $("submitTypedBtn").disabled =
+      !active || sending || listening || ending;
+
+    $("endBtn").disabled =
+      !active || sending || ending;
+  }
+
+  async function analyseDocuments() {
+    const resume = $("resumeFile").files[0];
+    const jobFile = $("jobFile").files[0];
+    const jobText = $("jobText").value.trim();
+
+    if (!resume) {
+      return status("Please upload your resume.", true);
+    }
+
+    if (!jobFile && jobText.length < 20) {
+      return status("Upload or paste a job description.", true);
+    }
+
+    const form = new FormData();
+
+    form.append(
+      "candidate_name",
+      $("candidateName").value.trim() || "Candidate"
+    );
+    form.append("resume_file", resume);
+
+    if (jobFile) form.append("job_file", jobFile);
+
+    form.append("job_text", jobText);
+
+    $("analyseBtn").disabled = true;
+    status("Analysing your documents...");
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        body: form
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Analysis failed.");
+      }
+
+      analysisId = data.analysis_id;
+
+      showAnalysis(data.analysis);
+
+      $("analysisSection").classList.remove("hidden");
+      $("analysisSection").scrollIntoView({ behavior: "smooth" });
+
+      status("Analysis complete. Review it before starting.");
+    } catch (error) {
+      status(error.message, true);
+    } finally {
+      $("analyseBtn").disabled = false;
+    }
+  }
+
+  async function startInterview() {
+    if (!analysisId) {
+      return status("Analyse your documents first.", true);
+    }
+
+    $("startBtn").disabled = true;
+    status("Starting interview...");
+
+    try {
+      const data = await post("/api/start", {
+        analysis_id: analysisId
+      });
+
+      sessionId = data.session_id;
+      active = true;
+      ending = false;
+      currentReport = null;
+
+      $("question").textContent = data.text;
+      $("heard").textContent = "Waiting for your answer.";
+      $("typedAnswer").value = "";
+      $("transcript").innerHTML = "";
+      $("latestFeedback").classList.add("hidden");
+      $("reportSection").classList.add("hidden");
+      $("interviewSection").classList.remove("hidden");
+
+      addTranscript("AI Interviewer", data.text);
+
+      updateButtons();
+
+      status("Interview started. Listen to the question, then answer.");
+      await speak(data.audio_base64);
+    } catch (error) {
+      status(error.message, true);
+    } finally {
+      updateButtons();
+    }
+  }
+
+  function showFeedback(feedback) {
+    if (!feedback) return;
+
+    $("latestFeedback").innerHTML =
+      "<h3>Answer Feedback</h3>" +
+      "<div class='score'>" + safe(feedback.score) + " / 5</div>" +
+      "<p>" + safe(feedback.relevance) + "</p>" +
+      "<b>Strengths</b>" + list(feedback.strengths) +
+      "<b>Improvements</b>" + list(feedback.improvements) +
+      "<b>Suggested Answer</b>" +
+      "<p>" + safe(feedback.suggested_better_answer) + "</p>";
+
+    $("latestFeedback").classList.remove("hidden");
+  }
+
+  async function sendAnswer(answer) {
+    answer = String(answer || "").trim();
+
+    if (!answer) {
+      return status("No answer detected. Please try again.", true);
+    }
+
+    // Prevent two submissions for the same answer.
+    if (!active || sending || ending || !sessionId) return;
+
+    sending = true;
+
+    // Stop any remaining microphone activity.
+    stopRequested = true;
+    cancelAnswer = true;
+    listening = false;
+
+    if (restartTimer !== null) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+
+    updateButtons();
+
+    $("heard").textContent = answer;
+    $("typedAnswer").value = "";
+
+    addTranscript("You", answer);
+    status("Evaluating your answer...");
+
+    try {
+      const data = await post("/api/answer", {
+        session_id: sessionId,
+        answer: answer
+      });
+
+      showFeedback(data.answer_feedback);
+
+      if (data.finished) {
+        active = false;
+        currentReport = data.report || null;
+
+        $("question").textContent =
+          data.text || "Interview completed.";
+
+        if (currentReport) {
+          showReport(currentReport);
+        }
+
+        status("Interview complete. Your report is ready.");
+      } else {
+        $("question").textContent = data.text;
+        addTranscript("AI Interviewer", data.text);
+
+        status("Next question is ready. Answer when you're ready.");
+      }
+
+      await speak(data.audio_base64);
+    } catch (error) {
+      status(
+        error.message +
+        " Your answer is still visible above. You can try submitting again.",
+        true
+      );
+    } finally {
+      sending = false;
+      stopRequested = false;
+      cancelAnswer = false;
+      finalizingAnswer = false;
+      recognition = null;
+      updateButtons();
+    }
+  }
+
+  function updateRecognisedAnswer() {
+    const finalText = finalTranscript.trim();
+    const interimText = interimTranscript.trim();
+
+    $("heard").textContent =
+      [finalText, interimText].filter(Boolean).join(" ") ||
+      "Listening for your answer...";
+  }
+
+  // Start one microphone recognition cycle.
+  function startRecognitionCycle() {
+    if (!listening || stopRequested || cancelAnswer ||
+        !active || sending || ending) {
+      return;
+    }
+
+    if (!SpeechRecognition) {
+      listening = false;
+      updateButtons();
+      status("Speech recognition is unavailable. Use Chrome or type your answer.", true);
+      return;
+    }
+
+    const instance = new SpeechRecognition();
+    recognition = instance;
+
+    instance.lang = "en-IN";
+    instance.continuous = true;
+    instance.interimResults = true;
+    instance.maxAlternatives = 1;
+
+    instance.onstart = () => {
+      if (listening && !stopRequested) {
+        $("micHint").textContent =
+          "Microphone active. Pause whenever you need to think.";
+        status("Listening... Your answer will NOT submit automatically.");
+      }
+    };
+
+    instance.onresult = event => {
+      if (!listening || stopRequested || cancelAnswer) return;
+
+      interimTranscript = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const recognisedText = result[0].transcript.trim();
+
+        if (!recognisedText) continue;
+
+        if (result.isFinal) {
+          finalTranscript += recognisedText + " ";
+        } else {
+          interimTranscript += recognisedText + " ";
+        }
+      }
+
+      updateRecognisedAnswer();
+    };
+
+    instance.onerror = event => {
+      const errors = {
+        "not-allowed": "Allow microphone access in your browser settings.",
+        "service-not-allowed": "The browser speech service is not allowed.",
+        "audio-capture": "No microphone found. Check your Mac microphone settings.",
+        "network": "Speech recognition needs a working connection in this browser.",
+        "language-not-supported": "This browser does not support the selected language."
+      };
+
+      const message = errors[event.error];
+
+      if (message) {
+        cancelAnswer = true;
+        stopRequested = true;
+        listening = false;
+
+        if (restartTimer !== null) {
+          clearTimeout(restartTimer);
+          restartTimer = null;
+        }
+
+        $("micHint").textContent = message;
+        status(message, true);
+        updateButtons();
+      } else if (event.error === "no-speech") {
+        // Silence is not a reason to submit or discard the answer.
+        status("No speech detected just now. You can continue when ready.");
+      } else if (event.error !== "aborted") {
+        status("Microphone issue: " + event.error + ". Trying to continue.");
+      }
+    };
+
+    instance.onend = () => {
+      if (recognition === instance) {
+        recognition = null;
+      }
+
+      // The user explicitly asked to stop: now submit once.
+      if (stopRequested) {
+        listening = false;
+        updateButtons();
+
+        if (cancelAnswer || ending || !active) return;
+
+        if (finalizingAnswer) return;
+        finalizingAnswer = true;
+
+        const answer = finalTranscript.trim();
+
+        if (answer) {
+          sendAnswer(answer);
+        } else {
+          finalizingAnswer = false;
+          stopRequested = false;
+          cancelAnswer = false;
+          $("heard").textContent = "No speech was recognised.";
+          status("No answer was recognised. Try again or type your answer.", true);
+          updateButtons();
+        }
+
+        return;
+      }
+
+      // Chrome may end recognition after silence. Keep the answer and restart.
+      if (listening && active && !sending && !ending && !cancelAnswer) {
+        status("Brief pause detected. Keeping your answer and restarting the microphone.");
+
+        if (restartTimer !== null) {
+          clearTimeout(restartTimer);
+        }
+
+        restartTimer = setTimeout(() => {
+          restartTimer = null;
+
+          if (listening && active && !stopRequested &&
+              !sending && !ending && !cancelAnswer) {
+            startRecognitionCycle();
+          }
+        }, 300);
+      }
+    };
+
+    try {
+      instance.start();
+    } catch (error) {
+      // Some browsers reject an immediate restart. Retry if the user is
+      // still recording instead of submitting the answer.
+      if (listening && !stopRequested && !cancelAnswer) {
+        status("Restarting the microphone. Please wait...");
+        restartTimer = setTimeout(() => {
+          restartTimer = null;
+          if (listening && !stopRequested && active && !sending) {
+            startRecognitionCycle();
+          }
+        }, 700);
+      } else {
+        status("Could not start the microphone. Please try again.", true);
+      }
+    }
+  }
+
+  function startListening() {
+    if (!SpeechRecognition) {
+      return status("Speech recognition is unavailable. Try Chrome or type your answer.", true);
+    }
+
+    if (!active || listening || sending || ending) return;
+
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+
+    finalTranscript = "";
+    interimTranscript = "";
+    stopRequested = false;
+    cancelAnswer = false;
+    finalizingAnswer = false;
+    listening = true;
+
+    $("heard").textContent = "Listening for your answer...";
+    $("micHint").textContent = "Speak naturally. Pauses are allowed.";
+    updateButtons();
+
+    startRecognitionCycle();
+  }
+
+  // This is the ONLY normal voice-answer submission trigger.
+  function stopListeningAndSubmit() {
+    if (!listening || sending || ending) return;
+
+    stopRequested = true;
+    interimTranscript = "";
+
+    if (restartTimer !== null) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+
+    status("Finishing your answer...");
+
+    const instance = recognition;
+
+    if (instance) {
+      try {
+        // stop() allows the browser to deliver any pending final result.
+        instance.stop();
+      } catch {
+        // If the recognition instance already ended, finish from the
+        // transcript that has already been collected.
+        if (!finalizingAnswer) {
+          listening = false;
+          finalizingAnswer = true;
+
+          const answer = finalTranscript.trim();
+
+          if (answer) {
+            sendAnswer(answer);
+          } else {
+            finalizingAnswer = false;
+            stopRequested = false;
+            status("No answer recognised. Please try again.", true);
+            updateButtons();
+          }
+        }
+      }
+    } else {
+      listening = false;
+
+      if (!finalizingAnswer) {
+        finalizingAnswer = true;
+        const answer = finalTranscript.trim();
+
+        if (answer) {
+          sendAnswer(answer);
+        } else {
+          finalizingAnswer = false;
+          stopRequested = false;
+          status("No answer recognised. Please try again.", true);
+          updateButtons();
+        }
+      }
+    }
+
+    updateButtons();
+  }
+
+  async function submitTypedAnswer() {
+    if (!active || sending || listening || ending) return;
+
+    const answer = $("typedAnswer").value.trim();
+
+    if (!answer) {
+      return status("Type an answer before submitting.", true);
+    }
+
+    await sendAnswer(answer);
+  }
+
+  async function endInterview() {
+    if (!sessionId || !active || sending || ending) return;
+
+    ending = true;
+    cancelAnswer = true;
+    stopRequested = true;
+    listening = false;
+
+    if (restartTimer !== null) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+
+    if (recognition) {
+      try {
+        recognition.abort();
+      } catch {}
+      recognition = null;
+    }
+
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+
+    status("Preparing your report...");
+    updateButtons();
+
+    try {
+      const data = await post("/api/stop", {
+        session_id: sessionId
+      });
+
+      active = false;
+      currentReport = data.report || null;
+
+      $("question").textContent = data.text || "Interview ended.";
+
+      if (currentReport) {
+        showReport(currentReport);
+      }
+
+      status("Interview ended. Your report is ready.");
+      await speak(data.audio_base64);
+    } catch (error) {
+      status(error.message, true);
+    } finally {
+      ending = false;
+      stopRequested = false;
+      cancelAnswer = false;
+      finalizingAnswer = false;
+      updateButtons();
+    }
+  }
+
+  function showReport(report) {
+    const analysis = report.document_analysis || {};
+    const answers = report.answer_feedback || [];
+
+    $("reportContent").innerHTML =
+      "<div class='card'><b>Candidate:</b> " +
+      safe(report.candidate_name) +
+      "<br><b>Role:</b> " + safe(report.target_role) +
+      "<br><b>Answers:</b> " + safe(report.answers_count) +
+      "<br><b>Average Score:</b> " +
+      safe(report.average_score_out_of_5) + " / 5</div>" +
+
+      "<div class='grid'><div class='card'><h3>Strengths</h3>" +
+      list(report.strengths) +
+      "</div><div class='card'><h3>Improvements</h3>" +
+      list(report.improvements) +
+      "</div></div>" +
+
+      "<div class='card'><h3>Job Requirements</h3>" +
+      list(analysis.key_job_requirements) +
+      "<h3>Skill Gaps</h3>" + list(analysis.skill_gaps) +
+      "</div><h3>Answer Feedback</h3>" +
+
+      (answers.length ? answers.map(item => {
+        const ev = item.evaluation || {};
+
+        return "<div class='card'><h3>Question " +
+          safe(item.question_number) + " — " +
+          safe(ev.score) + " / 5</h3>" +
+          "<p><b>Question:</b> " + safe(item.question) + "</p>" +
+          "<p><b>Your Answer:</b> " + safe(item.answer) + "</p>" +
+          "<p>" + safe(ev.relevance) + "</p>" +
+          "<b>Strengths</b>" + list(ev.strengths) +
+          "<b>Improvements</b>" + list(ev.improvements) +
+          "<p><b>Suggested Answer:</b> " +
+          safe(ev.suggested_better_answer) + "</p></div>";
+      }).join("") : "<p>No answers recorded.</p>") +
+
+      "<p class='muted'>" +
+      safe(report.disclaimer || "Practice feedback only.") + "</p>";
+
+    $("reportSection").classList.remove("hidden");
+    $("reportSection").scrollIntoView({ behavior: "smooth" });
+  }
+
+  function downloadReport() {
+    if (!currentReport) {
+      return status("No report available yet.", true);
+    }
+
+    const blob = new Blob(
+      [JSON.stringify(currentReport, null, 2)],
+      { type: "application/json" }
+    );
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "interview-report.json";
+    link.click();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function resetApp() {
+    if (restartTimer !== null) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+
+    if (recognition) {
+      try {
+        recognition.abort();
+      } catch {}
+      recognition = null;
+    }
+
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+
+    analysisId = null;
+    sessionId = null;
+    currentReport = null;
+
+    active = false;
+    listening = false;
+    sending = false;
+    ending = false;
+    stopRequested = false;
+    cancelAnswer = false;
+    finalizingAnswer = false;
+
+    finalTranscript = "";
+    interimTranscript = "";
+
+    $("analysisSection").classList.add("hidden");
+    $("interviewSection").classList.add("hidden");
+    $("reportSection").classList.add("hidden");
+    $("transcript").innerHTML = "";
+    $("latestFeedback").classList.add("hidden");
+    $("typedAnswer").value = "";
+
+    status("Ready for a new interview.");
+    updateButtons();
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  $("analyseBtn").onclick = analyseDocuments;
+  $("startBtn").onclick = startInterview;
+  $("listenBtn").onclick = startListening;
+  $("stopListenBtn").onclick = stopListeningAndSubmit;
+  $("submitTypedBtn").onclick = submitTypedAnswer;
+  $("endBtn").onclick = endInterview;
+  $("downloadBtn").onclick = downloadReport;
+  $("newInterviewBtn").onclick = resetApp;
+
+  $("changeDocsBtn").onclick = () => {
+    $("analysisSection").classList.add("hidden");
+    $("uploadSection").scrollIntoView({ behavior: "smooth" });
+  };
+
+  if (!SpeechRecognition) {
+    status(
+      "Speech recognition is not supported in this browser. Try Chrome or type your answers.",
+      true
+    );
+  }
+
+  updateButtons();
+})();
+</script>
+</body>
+</html>
