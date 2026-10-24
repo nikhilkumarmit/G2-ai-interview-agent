@@ -229,7 +229,7 @@
       ["Job Requirements", data.key_job_requirements],
       ["Matching Strengths", data.matching_strengths],
       ["Skill Gaps", data.skill_gaps],
-      ["Interview Focus", data.interview_focus]
+      
     ];
 
     $("analysisContent").innerHTML =
@@ -816,11 +816,6 @@
       "<br><b>Average Score:</b> " +
       safe(report.average_score_out_of_5) + " / 5</div>" +
 
-      "<div class='grid'><div class='card'><h3>Strengths</h3>" +
-      list(report.strengths) +
-      "</div><div class='card'><h3>Improvements</h3>" +
-      list(report.improvements) +
-      "</div></div>" +
 
       "<div class='card'><h3>Job Requirements</h3>" +
       list(analysis.key_job_requirements) +
@@ -836,9 +831,6 @@
           "<p><b>Question:</b> " + safe(item.question) + "</p>" +
           "<p><b>Your Answer:</b> " + safe(item.answer) + "</p>" +
           "<p>" + safe(ev.relevance) + "</p>" +
-          "<b>Strengths</b>" + list(ev.strengths) +
-          "<b>Improvements</b>" + list(ev.improvements) +
-          "<p><b>Suggested Answer:</b> " +
           safe(ev.suggested_better_answer) + "</p></div>";
       }).join("") : "<p>No answers recorded.</p>") +
 
